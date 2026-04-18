@@ -1,0 +1,14 @@
+{
+    "id": "ai-assistant",
+    "name": "AI Assistant",
+    "version": "0.1.0",
+    "description": "General-purpose voice assistant on Move. Best for songwriting prompts, creative sparks, and brainstorming. Long-form scrollable replies, optionally read aloud via TTS. Shares the OpenAI API key with AI Manual.",
+    "author": "Schwung",
+    "hidden": false,
+    "component_type": "tool",
+    "tool_config": {
+        "interactive": true,
+        "skip_file_browser": true,
+        "overtake": true
+    }
+}

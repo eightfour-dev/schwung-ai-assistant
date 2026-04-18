@@ -1,0 +1,56 @@
+{
+    "title": "AI Assistant",
+    "sections": [
+        {
+            "title": "Setup",
+            "lines": [
+                "Set your OpenAI API key in",
+                "move.local:7700/config under",
+                "the Assistant section.",
+                "",
+                "Same key as AI Manual.",
+                "Defaults to gpt-4o-mini."
+            ]
+        },
+        {
+            "title": "Talking",
+            "lines": [
+                "Hold any pad in the bottom",
+                "row to record. Release to",
+                "send.",
+                "",
+                "Top-right pad clears the",
+                "conversation history.",
+                "",
+                "Jog wheel scrolls long",
+                "replies."
+            ]
+        },
+        {
+            "title": "Listening",
+            "lines": [
+                "Replies are spoken aloud",
+                "via the on-device screen",
+                "reader if it is enabled in",
+                "Schwung settings.",
+                "",
+                "Knob 1 toggles speaking",
+                "for this session only."
+            ]
+        },
+        {
+            "title": "What it's for",
+            "lines": [
+                "Brainstorming, songwriting",
+                "prompts, lyric ideas, sound",
+                "design directions, music",
+                "theory, or general chat.",
+                "",
+                "For Move/Schwung how-to",
+                "questions use AI Manual",
+                "instead — it has the",
+                "manuals loaded."
+            ]
+        }
+    ]
+}
