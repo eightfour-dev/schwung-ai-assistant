@@ -9,8 +9,9 @@
  * music theory questions, and open-ended brainstorming. For documented
  * Move/Schwung features use AI Manual instead — it has the manuals loaded.
  *
- * Key file is shared with AI Manual at
- * /data/UserData/schwung/secrets/openai_key.txt (set via move.local:7700/config).
+ * Settings (provider, API keys, model, system prompt) are configured per
+ * module at move.local:7700/modules/ai-assistant — keys land in this
+ * module's own secrets/ dir at 0600.
  */
 
 import * as os from 'os';
@@ -34,39 +35,47 @@ const PAD_TALK_MAX = 75;
 const PAD_CLEAR = 99;
 const KNOB1_TOUCH_NOTE = 0;  /* knob 1 capacitive-touch note: toggle TTS */
 
-const DIR = "/data/UserData/schwung/ai-assistant";
-const SECRETS_DIR = "/data/UserData/schwung/secrets";
-const WAV_PATH = DIR + "/in.wav";
-const STT_RESP = DIR + "/stt_resp.json";
-const STT_STAT = DIR + "/stt_status.json";
-const CHAT_REQ = DIR + "/chat_req.json";
-const CHAT_RESP = DIR + "/chat_resp.json";
-const CHAT_STAT = DIR + "/chat_status.json";
-const PROBE_RESP = DIR + "/probe_resp";
-const PROBE_STAT = DIR + "/probe_status.json";
-const PROBE_URL = "https://www.google.com/generate_204";
+/* Per-module config layout (host 0.9.8+):
+ *   <MODULE_DIR>/config.json           — settings written by schwung-manager
+ *   <MODULE_DIR>/secrets/<key>.txt     — password-typed settings (0600)
+ *   <MODULE_DIR>/settings-schema.json  — schema fragment surfaced in the
+ *                                        web UI; module owns its defaults
+ *   <MODULE_DIR>/default_system_prompt.txt  — default for the textarea
+ *   <MODULE_DIR>/cache/                — runtime working files (curl req/resp,
+ *                                        recorded WAV, probe state)
+ */
+const MODULE_DIR  = "/data/UserData/schwung/modules/tools/ai-assistant";
+const CONFIG_PATH = MODULE_DIR + "/config.json";
+const SECRETS_DIR = MODULE_DIR + "/secrets";
+const CACHE_DIR   = MODULE_DIR + "/cache";
+const WAV_PATH    = CACHE_DIR + "/in.wav";
+const STT_RESP    = CACHE_DIR + "/stt_resp.json";
+const STT_STAT    = CACHE_DIR + "/stt_status.json";
+const CHAT_REQ    = CACHE_DIR + "/chat_req.json";
+const CHAT_RESP   = CACHE_DIR + "/chat_resp.json";
+const CHAT_STAT   = CACHE_DIR + "/chat_status.json";
+const PROBE_RESP  = CACHE_DIR + "/probe_resp";
+const PROBE_STAT  = CACHE_DIR + "/probe_status.json";
+const PROBE_URL   = "https://www.google.com/generate_204";
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
-const SHADOW_CFG = "/data/UserData/schwung/shadow_config.json";
 
 const SAMPLER_SOURCE_MOVE_INPUT = 1;
 const MAX_TURNS = 10;
 
-/* Path to the default system prompt file shipped with this module. Kept as
- * a plain text file so it's a single source of truth — both this module and
- * the Schwung Manager web UI read the same file when populating/resetting
- * the prompt. */
-const DEFAULT_PROMPT_PATH =
-    "/data/UserData/schwung/modules/tools/ai-assistant/default_system_prompt.txt";
+/* Path to the default system prompt file shipped with this module. Same
+ * file is referenced by `default_source` in settings-schema.json so the
+ * web UI populates the textarea from it on first render. */
+const DEFAULT_PROMPT_PATH = MODULE_DIR + "/default_system_prompt.txt";
 
-/* Last-resort fallback if both shadow_config.ai_assistant_system_prompt AND
- * the on-disk default file are missing (e.g. corrupted install). Kept short. */
+/* Last-resort fallback if both the saved system_prompt AND the on-disk
+ * default file are missing (e.g. corrupted install). Kept short. */
 const FALLBACK_SYSTEM_PROMPT =
     "You are a creative voice companion for a musician using the Ableton Move. " +
     "Reply in 80-200 words of plain prose, conversational and encouraging. " +
     "No markdown, no bullet lists.";
 
 /* Resolved at init() from (in order): the saved custom prompt in
- * shadow_config.json, the bundled default file, or FALLBACK_SYSTEM_PROMPT. */
+ * <MODULE_DIR>/config.json, the bundled default file, or FALLBACK_SYSTEM_PROMPT. */
 let SYSTEM_PROMPT = FALLBACK_SYSTEM_PROMPT;
 
 let state = "idle";
@@ -80,7 +89,7 @@ let frameCount = 0;
 let recStartFrame = 0;
 let configChecked = false;
 
-/* TTS startup state pulled from shadow_config.ai_assistant_speak_replies.
+/* TTS startup state pulled from per-module config (`speak_replies`).
  * Only applied on module init — subsequent config refreshes update this
  * variable but don't clobber the user's in-session knob-1 toggle. */
 let ttsDefaultFromConfig = false;
@@ -100,7 +109,7 @@ let lastProbeFrame = -9999;
 const PROBE_RE_INTERVAL_FRAMES = 44 * 10;
 
 function ensureDir() {
-    if (typeof host_ensure_dir === "function") host_ensure_dir(DIR);
+    if (typeof host_ensure_dir === "function") host_ensure_dir(CACHE_DIR);
 }
 
 function safeUnlink(path) {
@@ -153,31 +162,34 @@ function pollConnectivityProbe() {
     safeUnlink(PROBE_STAT);
 }
 
-function readSecret(filename) {
-    const path = SECRETS_DIR + "/" + filename;
+function readSecret(key) {
+    /* Per-module secrets dir: <MODULE_DIR>/secrets/<key>.txt, mode 0600,
+     * written by schwung-manager when a password-typed setting is set. */
+    const path = SECRETS_DIR + "/" + key + ".txt";
     if (!host_file_exists(path)) return null;
     const s = host_read_file(path);
     return s ? s.trim() : null;
 }
 
 function loadConfig() {
-    providerCfg.openai.key = readSecret("openai_key.txt");
-    providerCfg.gemini.key = readSecret("gemini_key.txt");
+    /* Schema keys are module-scoped, so they don't carry an "ai_" prefix. */
+    providerCfg.openai.key = readSecret("openai_api_key");
+    providerCfg.gemini.key = readSecret("gemini_api_key");
 
     let customPrompt = "";
-    if (host_file_exists(SHADOW_CFG)) {
+    if (host_file_exists(CONFIG_PATH)) {
         try {
-            const cfg = JSON.parse(host_read_file(SHADOW_CFG) || "{}");
-            if (cfg.ai_provider) providerCfg.provider = String(cfg.ai_provider).trim();
+            const cfg = JSON.parse(host_read_file(CONFIG_PATH) || "{}");
+            if (cfg.provider) providerCfg.provider = String(cfg.provider).trim();
             if (cfg.openai_model) providerCfg.openai.chatModel = String(cfg.openai_model).trim();
             if (cfg.openai_base_url) {
                 providerCfg.openai.baseUrl = String(cfg.openai_base_url).trim().replace(/\/+$/, "");
             }
             if (cfg.gemini_model) providerCfg.gemini.chatModel = String(cfg.gemini_model).trim();
-            if (typeof cfg.ai_assistant_system_prompt === "string") {
-                customPrompt = cfg.ai_assistant_system_prompt.trim();
+            if (typeof cfg.system_prompt === "string") {
+                customPrompt = cfg.system_prompt.trim();
             }
-            ttsDefaultFromConfig = (cfg.ai_assistant_speak_replies === true);
+            ttsDefaultFromConfig = (cfg.speak_replies === true);
         } catch (e) { /* ignore */ }
     }
 
