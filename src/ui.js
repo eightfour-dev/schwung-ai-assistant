@@ -101,6 +101,11 @@ let providerCfg = {
     gemini:  {key: null, chatModel: "gemini-2.5-flash"},
 };
 let ttsEnabled = true;       /* per-session toggle; off via knob 1 touch */
+/* Snapshot of the device's global TTS flag at init() time, so onUnload can
+ * restore it. Without this, exiting mid-reply leaves TTS enabled device-wide
+ * because applyTtsEnabled() flipped the global flag on but no exit path
+ * flipped it back. */
+let priorGlobalTtsEnabled = false;
 
 /* Connectivity probe state. See ai-manual/ui.js for the same logic. */
 let online = null;
@@ -841,6 +846,11 @@ globalThis.init = function() {
     ensureDir();
     cleanupTransientFiles();
     loadConfig();
+    /* Capture the device's current global TTS state BEFORE we apply our own,
+     * so onUnload can put it back exactly the way the user had it. */
+    priorGlobalTtsEnabled = (typeof tts_get_enabled === "function")
+        ? !!tts_get_enabled()
+        : false;
     /* TTS starts off by default. Users who want replies spoken aloud can
      * either flip the "Speak AI Assistant Replies" setting in the web UI
      * (persistent) or touch knob 1 in-session (transient). */
@@ -852,6 +862,17 @@ globalThis.init = function() {
     /* Probe internet right away so the user sees an "Offline" message before
      * recording. */
     startConnectivityProbe();
+};
+
+/* Called by the host before module teardown — covers Back-button exit,
+ * overtake eviction, and any other path that unloads us. */
+globalThis.onUnload = function() {
+    /* Restore the device-wide TTS flag to whatever it was before we entered.
+     * Otherwise an exit while the reply is still being spoken (or any exit
+     * after applyTtsEnabled() ran) leaves TTS enabled on the device. */
+    if (typeof tts_set_enabled === "function") tts_set_enabled(priorGlobalTtsEnabled);
+    /* Re-enable sampler chatter ("Sample saved" etc.) for the next user. */
+    if (typeof host_sampler_set_silent === "function") host_sampler_set_silent(false);
 };
 
 globalThis.tick = function() {
@@ -918,9 +939,8 @@ globalThis.onMidiMessageInternal = function(data) {
         }
     } else if (status === 0xB0) {
         if (d1 === CC_BACK && d2 > 0) {
-            /* Restore default sampler chatter for the next non-tool user
-             * (Shift+Sample workflow expects "Sample saved" announcements). */
-            if (typeof host_sampler_set_silent === "function") host_sampler_set_silent(false);
+            /* Cleanup (sampler silent flag, global TTS) happens in onUnload,
+             * which the host calls on every exit path — not just CC_BACK. */
             host_exit_module();
         } else if (d1 === CC_JOG || d1 === CC_KNOB1) {
             const delta = d2 < 64 ? d2 : d2 - 128;
